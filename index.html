@@ -897,6 +897,7 @@
         <div class="row" style="margin-top:8px;">
           <button class="btn gray" id="btnTopupTon">Пополнить TON</button>
           <div class="muted" id="tonWalletInfo">Кошелёк не подключен</div>
+          <div class="muted" id="tonWalletBalanceInfo" style="font-size:12px;opacity:.8;">Баланс кошелька: —</div>
         </div>
         <div class="row" id="tonTopupControls" style="margin-top:8px; display:none;">
           <input class="input" id="topupTonInput" type="number" min="0.01" step="0.01" value="0.01" style="max-width:120px;" />
@@ -1144,6 +1145,8 @@
   document.getElementById("openBotLink").href = BOT_LINK;
 
   const WS_URL = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
+  const API_ORIGIN = (window.__API_ORIGIN__ || localStorage.getItem("evil_api_origin") || "").trim();
+  const API_BASE = API_ORIGIN ? API_ORIGIN.replace(/\/$/, "") : "";
 
   // ===== Telegram detect
   const tg = window.Telegram?.WebApp;
@@ -1470,8 +1473,8 @@
     } else if (currentBalances.stars >= 50) {
       sendMsg({ type:"quick_match", userKey, profile, stake: 50, currency:"stars" });
     } else {
-      alert("Недостаточно средств. Пополните TON или ⭐.");
-      setTab("profile");
+      const go = confirm("Недостаточно средств для быстрой игры. Перейти к пополнению?");
+      if (go) setTab("profile");
     }
   };
   btnQuickCancel.onclick = () => {
@@ -1487,18 +1490,51 @@
   const tonTopupControls = document.getElementById("tonTopupControls");
   const tonWalletInfo = document.getElementById("tonWalletInfo");
   let linkedWalletAddress = "";
-  const tonConnectManifestUrl = location.origin + "/tonconnect-manifest.json";
+  let pendingTonOrder = null;
+  let walletTonBalance = null;
+  const tonWalletBalanceInfo = document.getElementById("tonWalletBalanceInfo");
+  function formatWalletAddress(addr) {
+    const raw = String(addr || "").trim();
+    if (!raw) return "";
+    try {
+      if (window.TonWeb?.Address) {
+        const a = new TonWeb.Address(raw);
+        return a.toString(true, true, true);
+      }
+    } catch {}
+    return raw;
+  }
+  async function refreshWalletBalanceUi() {
+    if (!linkedWalletAddress) {
+      walletTonBalance = null;
+      tonWalletBalanceInfo.textContent = "Баланс кошелька: —";
+      return;
+    }
+    try {
+      const j = await safeFetchJson("/pay/ton/wallet-balance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ walletAddress: linkedWalletAddress })
+      });
+      walletTonBalance = Number(j.ton || 0);
+      tonWalletBalanceInfo.textContent = `Баланс кошелька: ${walletTonBalance.toFixed(2)} TON`;
+    } catch (e) {
+      tonWalletBalanceInfo.textContent = "Баланс кошелька: недоступен";
+    }
+  }
+  const tonConnectManifestUrl = (API_BASE || location.origin) + "/tonconnect-manifest.json";
   const tonConnectUI = (window.TON_CONNECT_UI)
     ? new TON_CONNECT_UI.TonConnectUI({ manifestUrl: tonConnectManifestUrl })
     : null;
 
   async function safeFetchJson(url, options) {
-    const r = await fetch(url, options);
+    const finalUrl = /^https?:\/\//.test(url) ? url : (API_BASE + url);
+    const r = await fetch(finalUrl, options);
     const text = await r.text();
     let data = null;
     try { data = JSON.parse(text); }
     catch {
-      throw new Error(r.ok ? "Сервер вернул некорректный ответ" : `Ошибка ${r.status}: сервер вернул HTML/текст`);
+      throw new Error(r.ok ? "Сервер вернул некорректный ответ" : `Ошибка ${r.status}: некорректный ответ сервера`);
     }
     if (!r.ok || !data?.ok) throw new Error(data?.error || `HTTP ${r.status}`);
     return data;
@@ -1508,8 +1544,9 @@
     const connected = !!linkedWalletAddress || !!tonConnectUI?.connected;
     tonTopupControls.style.display = connected ? "flex" : "none";
     tonWalletInfo.textContent = connected
-      ? `Кошелёк: ${linkedWalletAddress || "подключен"}`
+      ? `Кошелёк: ${formatWalletAddress(linkedWalletAddress || tonConnectUI?.account?.address || "подключен")}`
       : "Кошелёк не подключен";
+    if (!connected) tonWalletBalanceInfo.textContent = "Баланс кошелька: —";
   }
   syncTonTopupUi();
 
@@ -1541,18 +1578,19 @@
       });
       if (!j.url) throw new Error("stars_link_failed");
       if (tg && typeof tg.openInvoice === "function") tg.openInvoice(j.url);
-      else alert("Оплата доступна только внутри Telegram Mini App");
+      else tonOrderInfo.textContent = "Оплата доступна только в Telegram.";
     } catch (e) {
-      alert("Пополнение ⭐ не удалось: " + (e?.message || "неизвестная ошибка"));
+      tonOrderInfo.textContent = "Ошибка пополнения ⭐: " + (e?.message || "неизвестная ошибка");
     }
   };
 
   btnTopupTon.onclick = async () => {
-    if (!tonConnectUI) return alert("TON Connect недоступен");
+    if (!tonConnectUI) { tonOrderInfo.textContent = "TON Connect недоступен"; return; }
     if (!tonConnectUI.connected) await tonConnectUI.openModal();
     if (tonConnectUI.account?.address) {
       linkedWalletAddress = tonConnectUI.account.address;
       sendMsg({ type:"wallet_bind", walletAddress: linkedWalletAddress, userKey });
+      await refreshWalletBalanceUi();
       syncTonTopupUi();
     }
   };
@@ -1583,7 +1621,7 @@
         syncTonTopupUi();
       }
     } catch (e) {
-      alert("Пополнение TON не удалось: " + (e?.message || "неизвестная ошибка"));
+      tonOrderInfo.textContent = "Ошибка пополнения TON: " + (e?.message || "неизвестная ошибка");
     }
   };
 
