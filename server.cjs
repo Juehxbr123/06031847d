@@ -552,9 +552,9 @@ function isAdminTelegramId(id) {
 
 function parseBalanceCommand(text) {
   const t = String(text || "").trim();
-  let m = t.match(/^\/balance(?:@[a-zA-Z0-9_]+)?\s+@([a-zA-Z0-9_]{3,64})\s+([0-9]+(?:\.[0-9]{1,2})?)\s+(TON|STARS)$/i);
+  let m = t.match(/^\/balance\s+@([a-zA-Z0-9_]{3,64})\s+([0-9]+(?:\.[0-9]{1,2})?)\s+(TON|STARS)$/i);
   if (m) return { by: "username", username: m[1].toLowerCase(), amount: Number(m[2]), currency: m[3].toLowerCase() === "ton" ? "ton" : "stars" };
-  m = t.match(/^\/balance(?:@[a-zA-Z0-9_]+)?\s+([0-9]{4,20})\s+([0-9]+(?:\.[0-9]{1,2})?)\s+(TON|STARS)$/i);
+  m = t.match(/^\/balance\s+([0-9]{4,20})\s+([0-9]+(?:\.[0-9]{1,2})?)\s+(TON|STARS)$/i);
   if (m) return { by: "id", userId: String(m[1]), amount: Number(m[2]), currency: m[3].toLowerCase() === "ton" ? "ton" : "stars" };
   return null;
 }
@@ -571,8 +571,7 @@ async function processTgUpdate(u) {
         let userId = "";
         if (cmd.by === "id") userId = cmd.userId;
         else {
-          const target = String(cmd.username || "").replace(/^@/, "").toLowerCase();
-          const matched = Object.keys(balanceStore.users).filter(uid => String(balanceStore.users[uid]?.username || "").replace(/^@/, "").toLowerCase() === target);
+          const matched = Object.keys(balanceStore.users).filter(uid => String(balanceStore.users[uid]?.username || "") === cmd.username);
           if (matched.length !== 1) {
             if (u.message?.chat?.id) await tgApi("sendMessage", { chat_id: u.message.chat.id, text: "Пользователь не найден" });
             userId = "";
@@ -583,7 +582,7 @@ async function processTgUpdate(u) {
           saveStoreAtomic(balanceStore);
           pushBalanceToUser(userId);
           if (u.message?.chat?.id) {
-            const who = cmd.by === "id" ? `id ${userId}` : `@${String(cmd.username || "").replace(/^@/, "")}`;
+            const who = cmd.by === "id" ? `id ${userId}` : `@${cmd.username}`;
             await tgApi("sendMessage", { chat_id: u.message.chat.id, text: `${who} начислено ${cmd.amount} ${cmd.currency.toUpperCase()}` });
           }
         }
